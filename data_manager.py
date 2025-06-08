@@ -73,7 +73,6 @@ class DataManager:
             diesel_present = 'دیزل' in full_pos
             siba_present = 'سیبا' in full_pos
 
-            print(f"[{idx}] company={company}, dealer_code={dealer_code}, full_pos='{full_pos}' -> diesel={diesel_present}, siba={siba_present}")
 
             if diesel_present and not siba_present:
                 new_rows.append(row)
@@ -111,7 +110,19 @@ class DataManager:
                 smc_row = row.copy()
                 smc_row['company'] = 'smc'
                 smc_row['عنوان نمایندگی'] = self.bdc_to_smc_map[dealer_code]
+
+                # Apply 'سیبا' to job titles for the new SMC row if not already present
+                if pd.notna(smc_row.get('عنوان شغل')) and 'سیبا' not in smc_row['عنوان شغل']:
+                    smc_row['عنوان شغل'] = smc_row['عنوان شغل'].strip() + ' سیبا'
+                if pd.notna(smc_row.get('شغل موازی (ارتقا)')):
+                    # Split and append ' سیبا' to each part if not present
+                    alt_pos_parts = [p.strip() + ' سیبا' if 'سیبا' not in p else p.strip() for p in smc_row['شغل موازی (ارتقا)'].split('&&&')]
+                    smc_row['شغل موازی (ارتقا)'] = '&&&'.join(alt_pos_parts)
+
                 new_rows.append(smc_row)
+
+
+
 
         self.raw = pd.DataFrame(new_rows)
 
@@ -164,7 +175,6 @@ class DataManager:
 
     def _load_mapping_file(self, filename, mapping_dict):
         """Helper to load a single CSV mapping file."""
-        print(f"📥 Attempting to load {filename}")
         assert 'csv' in globals(), "csv is not in globals"
 
         path = os.path.join(self.mapping_path, filename)
@@ -180,21 +190,27 @@ class DataManager:
         """Returns a sorted list of unique dealer names."""
         return sorted(self.raw['عنوان نمایندگی'].unique())
 
+
+
     def get_dealer_categories(self, dealer_name):
-        """Extracts authorized service categories for a specific dealer."""
+
         categories = []
         dealer_code = dealer_name[:4]
+
         dealer_row = self.dealers[self.dealers.iloc[:, 0] == dealer_code]
 
         if not dealer_row.empty:
             row = dealer_row.iloc[0]
-            # Columns D to AV (index 3 to 47) contain category flags
             for col_idx in range(3, min(48, len(self.dealers.columns))):
                 category_name = self.dealers.columns[col_idx]
                 cell_value = row.iloc[col_idx]
                 if pd.notna(cell_value) and str(cell_value).strip().lower() == 'p':
                     categories.append(category_name)
+        else:
+            print(f"    ❌ No dealer found with code '{dealer_code}' in dealers.xlsx")
         return categories
+
+
 
     def get_personnel_for_dealer(self, dealer_name):
         """Retrieves all personnel records for a given dealer."""

@@ -11,30 +11,69 @@ class TrainingAnalyzer:
     def __init__(self, data_manager):
         self.dm = data_manager
 
-    def _get_requirements(self, mapped_company, mapped_position, mapped_categories):
+
+
+
+    def _get_requirements(self, mapped_company, mapped_position, mapped_categories, dealer_name=None):
         """
         Gathers all training requirements (sales and after-sales) for a given role.
         """
         grouped_reqs = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
 
         # 1. Get After-Sales Requirements
-        after_sheet_df = self.dm.after_sheets.get(mapped_company)
-        if after_sheet_df is not None:
-            # Always include 'عمومی' (General) category
+        print(f"\n=== DEBUG: Processing After-Sales Requirements ===")
+        print(f"Dealer: {dealer_name}, Mapped Company: {mapped_company}, Mapped Position: {mapped_position}, Categories: {mapped_categories}")
+
+        # For SMC dealers, use the SMC dealer code directly for after-sales too
+        if mapped_company == 'smc' and dealer_name:
+            dealer_code = dealer_name[:4]  # Use SMC dealer code
+            after_sheet_df = self.dm.after_sheets.get(dealer_code)
+            print(f"🔍 SMC dealer detected - using dealer code '{dealer_code}' for after-sales lookup")
+        else:
+            # Use original logic for non-SMC dealers
+            after_sheet_df = self.dm.after_sheets.get(mapped_company)
+            print(f"🔍 Non-SMC dealer - using mapped company '{mapped_company}' for after-sales lookup")
+
+        if after_sheet_df is None:
+            lookup_key = dealer_name[:4] if mapped_company == 'smc' and dealer_name else mapped_company
+            print(f"❌ No after-sales sheet found for key '{lookup_key}'")
+        else:
+            lookup_key = dealer_name[:4] if mapped_company == 'smc' and dealer_name else mapped_company
+            print(f"✅ Loaded after-sales sheet for key '{lookup_key}' with {len(after_sheet_df)} rows")
+
             search_cars = mapped_categories + ["عمومی"]
+            print(f"🔍 Looking for rows where position == '{mapped_position}' and car in {search_cars}")
+
+            matched_rows = 0
             for _, row in after_sheet_df.iterrows():
                 row_pos = str(row.get("پست کاری", "")).strip()
-                if row_pos == mapped_position:
-                    row_car = str(row.get("نام خودرو", "")).strip() or "عمومی"
-                    if row_car in search_cars:
-                        criteria = str(row.get("نام سرفصل", "")).strip()
-                        course = str(row.get("نام دوره آموزشی", "")).strip()
-                        if criteria and course and criteria != "nan" and course != "nan":
-                            grouped_reqs["after"][row_car][criteria].append(course)
+                row_car = str(row.get("نام خودرو", "")).strip() or "عمومی"
+
+                if row_pos == mapped_position and row_car in search_cars:
+                    criteria = str(row.get("نام سرفصل", "")).strip()
+                    course = str(row.get("نام دوره آموزشی", "")).strip()
+                    if criteria and course and criteria.lower() != "nan" and course.lower() != "nan":
+                        grouped_reqs["after"][row_car][criteria].append(course)
+                        matched_rows += 1
+
+            if matched_rows == 0:
+                print(f"⚠️ No matching rows found for mapped position '{mapped_position}' in after-sales sheet.")
 
         # 2. Get Sales Requirements
-        sales_sheet_df = self.dm.sales_sheets.get(mapped_company)
+        # For SMC dealers, use the SMC dealer code directly
+        if mapped_company == 'smc' and dealer_name:
+            dealer_code = dealer_name[:4]  # Use SMC dealer code
+            sales_sheet_df = self.dm.sales_sheets.get(dealer_code)
+            print(f"🔍 SMC dealer - using dealer code '{dealer_code}' for sales lookup")
+        else:
+            # Use original logic for non-SMC dealers
+            sales_sheet_df = self.dm.sales_sheets.get(mapped_company)
+            print(f"🔍 Non-SMC dealer - using mapped company '{mapped_company}' for sales lookup")
+        
         if sales_sheet_df is not None:
+            lookup_key = dealer_name[:4] if mapped_company == 'smc' and dealer_name else mapped_company
+            print(f"✅ Processing sales requirements from sheet for key '{lookup_key}'")
+            
             for _, row in sales_sheet_df.iterrows():
                 row_pos = str(row.get("پست کاری", "")).strip()
                 if row_pos == mapped_position:
@@ -42,8 +81,13 @@ class TrainingAnalyzer:
                     course = str(row.get("نام دوره آموزشی", "")).strip()
                     if criteria and course and criteria != "nan" and course != "nan":
                         grouped_reqs["sales"]["فروش"][criteria].append(course)
+        else:
+            lookup_key = dealer_name[:4] if mapped_company == 'smc' and dealer_name else mapped_company
+            print(f"❌ No sales sheet found for key '{lookup_key}'")
         
         return grouped_reqs
+
+
 
     def _calculate_pass_status(self, grouped_reqs, passed_courses_set):
         """
@@ -88,15 +132,27 @@ class TrainingAnalyzer:
         mapped_company = self.dm.company_mapping.get(raw_company, raw_company)
         mapped_position = self.dm.position_mapping.get(position, position)
         
-        dealer_cats = self.dm.get_dealer_categories(dealer_name)
+        # CRITICAL FIX: For SMC dealers, we need to get categories from the ORIGINAL BDC dealer
+        # because the dealer categories are stored under the BDC dealer code, not the SMC dealer name
+        if mapped_company == 'smc':
+            # Get the original BDC dealer name for category lookup
+            original_dealer_name = self.dm.get_original_dealer_name(dealer_name)
+            lookup_dealer_name = original_dealer_name
+            print(f"SMC dealer detected - using original BDC dealer for categories: {original_dealer_name}")
+        else:
+            lookup_dealer_name = self.dm.get_training_data_dealer_name(dealer_name)
+            print(f"Non-SMC dealer - using training data dealer name: {lookup_dealer_name}")
+        
+        dealer_cats = self.dm.get_dealer_categories(lookup_dealer_name)
         mapped_categories = [self.dm.car_mapping.get(cat, cat) for cat in dealer_cats]
 
         # Get passed courses
         passed_courses = personnel_data['عنوان دوره'].dropna().unique().tolist()
         mapped_passed_courses = {self.dm.course_mapping.get(c, c) for c in passed_courses}
         
-        # Get all requirements and calculate pass status
-        requirements = self._get_requirements(mapped_company, mapped_position, mapped_categories)
+        # Get all requirements - pass dealer_name for SMC handling
+        requirements = self._get_requirements(mapped_company, mapped_position, mapped_categories, dealer_name)
+        
         pass_statuses = self._calculate_pass_status(requirements, mapped_passed_courses)
 
         # Structure the final result
@@ -110,6 +166,8 @@ class TrainingAnalyzer:
             "pass_statuses": pass_statuses,
         }
         return analysis_result
+
+
 
     def generate_dealer_personnel_summary(self, dealer_name):
         """
