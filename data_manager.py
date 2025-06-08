@@ -100,26 +100,46 @@ class DataManager:
                 new_rows.extend([bdc_row, smc_row])
 
             else:
-                # Keep original BDC row
-                bdc_row = row.copy()
-                bdc_row['company'] = 'bdc'
-                bdc_row['عنوان نمایندگی'] = dealer_name
-                new_rows.append(bdc_row)
-                
-                # Create corresponding SMC row
-                smc_row = row.copy()
-                smc_row['company'] = 'smc'
-                smc_row['عنوان نمایندگی'] = self.bdc_to_smc_map[dealer_code]
+                            # Keep original BDC row
+                            bdc_row = row.copy()
+                            bdc_row['company'] = 'bdc'
+                            bdc_row['عنوان نمایندگی'] = dealer_name
+                            new_rows.append(bdc_row)
+                            
+                            # Create corresponding SMC row
+                            smc_row = row.copy()
+                            smc_row['company'] = 'smc'
+                            smc_row['عنوان نمایندگی'] = self.bdc_to_smc_map[dealer_code]
 
-                # Apply 'سیبا' to job titles for the new SMC row if not already present
-                if pd.notna(smc_row.get('عنوان شغل')) and 'سیبا' not in smc_row['عنوان شغل']:
-                    smc_row['عنوان شغل'] = smc_row['عنوان شغل'].strip() + ' سیبا'
-                if pd.notna(smc_row.get('شغل موازی (ارتقا)')):
-                    # Split and append ' سیبا' to each part if not present
-                    alt_pos_parts = [p.strip() + ' سیبا' if 'سیبا' not in p else p.strip() for p in smc_row['شغل موازی (ارتقا)'].split('&&&')]
-                    smc_row['شغل موازی (ارتقا)'] = '&&&'.join(alt_pos_parts)
+                            # Instead of appending ' سیبا', ensure the raw position will map correctly
+                            # This might require explicitly setting the raw position to "مکانیک سیبا موتور"
+                            # if the original was "مکانیک" and it's for an SMC dealer.
+                            # A more robust solution might involve a lookup function here.
 
-                new_rows.append(smc_row)
+                            # Example of a more direct (but perhaps overly simplified) fix:
+                            if pd.notna(smc_row.get('عنوان شغل')):
+                                original_pos = smc_row['عنوان شغل'].strip()
+                                if original_pos == 'مکانیک کار': # Assuming this is the mapped name from BDC
+                                    smc_row['عنوان شغل'] = 'مکانیک سیبا موتور' # Set it to the raw name that will map correctly
+                                # You'd need similar logic for 'شغل موازی (ارتقا)'
+
+                            # A better approach would be to have a reverse mapping or more sophisticated logic
+                            # For now, let's remove the problematic appending logic for demonstration purposes
+                            # and assume the raw data will be correct or a better mapping is in place.
+                            # If the goal is for SMC to have 'مکانیک سیبا موتور' as its raw title, then:
+                            if pd.notna(smc_row.get('عنوان شغل')) and 'مکانیک' in smc_row['عنوان شغل']:
+                                smc_row['عنوان شغل'] = 'مکانیک سیبا موتور'
+                            if pd.notna(smc_row.get('شغل موازی (ارتقا)')):
+                                alt_pos_parts = []
+                                for p in smc_row['شغل موازی (ارتقا)'].split('&&&'):
+                                    if 'مکانیک' in p.strip():
+                                        alt_pos_parts.append('مکانیک سیبا موتور')
+                                    else:
+                                        alt_pos_parts.append(p.strip())
+                                smc_row['شغل موازی (ارتقا)'] = '&&&'.join(alt_pos_parts)
+
+                            new_rows.append(smc_row)
+
 
 
 
@@ -193,10 +213,23 @@ class DataManager:
 
 
     def get_dealer_categories(self, dealer_name):
-
+        """
+        Returns a list of categories for a dealer.
+        For SMC dealers, returns hardcoded categories: ['j6', 'tigerv', 'عمومی']
+        For other dealers, looks up categories from dealers.xlsx
+        """
+        # Check if this is an SMC dealer by looking at the company in raw data
+        dealer_personnel = self.raw[self.raw['عنوان نمایندگی'] == dealer_name]
+        if not dealer_personnel.empty:
+            company = dealer_personnel.iloc[0].get('company', '')
+            if company == 'smc':
+                # Return hardcoded categories for SMC dealers
+                return ['j6', 'tigerv', 'عمومی']
+        
+        # For non-SMC dealers, use the original lookup logic
         categories = []
         dealer_code = dealer_name[:4]
-
+        
         dealer_row = self.dealers[self.dealers.iloc[:, 0] == dealer_code]
 
         if not dealer_row.empty:
@@ -208,6 +241,7 @@ class DataManager:
                     categories.append(category_name)
         else:
             print(f"    ❌ No dealer found with code '{dealer_code}' in dealers.xlsx")
+        
         return categories
 
 

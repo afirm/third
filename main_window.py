@@ -92,6 +92,7 @@ class MainWindow(QMainWindow):
 
         dealer_name = current.text()
         
+        
         # Generate the new summary data
         summary_data = self.analyzer.generate_dealer_personnel_summary(dealer_name)
         

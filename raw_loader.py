@@ -1,16 +1,26 @@
 import pandas as pd
 import re
 import os
+import csv
 
 def sanitize_dataframe(df):
     """
     Sanitize all values in a DataFrame using Persian normalization rules.
     Remove spaces only in columns 'نام دوره آموزشی' and 'عنوان دوره'.
+    Convert Persian digits to English digits.
     """
     persian_map = {
         'ي': 'ی',
         'ك': 'ک',
         '\u200c': ' ',  # ZWNJ to space
+    }
+    
+    # Persian/Arabic digit to English digit mapping
+    persian_digits_map = {
+        '۰': '0', '۱': '1', '۲': '2', '۳': '3', '۴': '4',
+        '۵': '5', '۶': '6', '۷': '7', '۸': '8', '۹': '9',
+        '٠': '0', '١': '1', '٢': '2', '٣': '3', '٤': '4',
+        '٥': '5', '٦': '6', '٧': '7', '٨': '8', '٩': '9'
     }
 
     def sanitize(text, remove_spaces=False):
@@ -23,8 +33,15 @@ def sanitize_dataframe(df):
         text = text.replace(', ', '&&&')
         if remove_spaces:
             text = text.replace(' ', '')  # Remove spaces only for specified columns
+        
+        # Convert Persian characters
         for arabic_char, persian_char in persian_map.items():
             text = text.replace(arabic_char, persian_char)
+        
+        # Convert Persian/Arabic digits to English digits
+        for persian_digit, english_digit in persian_digits_map.items():
+            text = text.replace(persian_digit, english_digit)
+            
         text = text.replace('&&&', 'ampersand')
         text = text.replace('،', '')
         text = re.sub(r'[^a-zA-Z0-9\u0600-\u06FF\s]', '', text)
@@ -71,7 +88,6 @@ def load_sanitized_data(file_path):
         print(f"Error loading {file_path}: {e}")
         return pd.DataFrame()
 
-# Updated data loading functions with dealer mapping integration
 
 def load_dealer_mappings():
     """Load dealer mappings from file"""
