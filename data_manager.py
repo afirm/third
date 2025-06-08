@@ -21,6 +21,8 @@ class DataManager:
         self.car_mapping = {}
         self.company_mapping = {}
         self.course_mapping = {}
+        self.bdc_to_smc_map = {}
+
 
     def load_all_data(self):
         """Loads all data files and mappings from disk."""
@@ -35,9 +37,136 @@ class DataManager:
         self._load_mapping_file('car_mapping.csv', self.car_mapping)
         self._load_mapping_file('company_mapping.csv', self.company_mapping)
         self._load_mapping_file('course_mapping.csv', self.course_mapping)
+        self._load_mapping_file('dealer_mappings.csv', self.bdc_to_smc_map)
+
+        self.load_bdc_to_smc_mapping()
+        self.apply_dual_dealer_logic()
+
+
+
+
+    def apply_dual_dealer_logic(self):
+        if 'company' not in self.raw.columns or 'عنوان نمایندگی' not in self.raw.columns:
+            return
+
+        def _filter_positions(position_str, keyword):
+            if not position_str:
+                return ''
+            parts = position_str.split('&&&')
+            filtered = [p for p in parts if keyword in p]
+            return '&&&'.join(filtered).strip()
+
+        new_rows = []
+        for idx, row in self.raw.iterrows():
+            company = row['company']
+            dealer_name = row['عنوان نمایندگی']
+            dealer_code = str(dealer_name).split(" ")[0]
+
+            if company != 'bdc' or dealer_code not in self.bdc_to_smc_map:
+                new_rows.append(row)
+                continue
+
+            main_pos = str(row.get('عنوان شغل', '') or '')
+            alt_pos = str(row.get('شغل موازی (ارتقا)', '') or '')
+            full_pos = main_pos + '&&&' + alt_pos if alt_pos else main_pos
+
+            diesel_present = 'دیزل' in full_pos
+            siba_present = 'سیبا' in full_pos
+
+            print(f"[{idx}] company={company}, dealer_code={dealer_code}, full_pos='{full_pos}' -> diesel={diesel_present}, siba={siba_present}")
+
+            if diesel_present and not siba_present:
+                new_rows.append(row)
+
+            elif siba_present and not diesel_present:
+                new_row = row.copy()
+                new_row['company'] = 'smc'
+                new_row['عنوان نمایندگی'] = self.bdc_to_smc_map[dealer_code]
+                new_rows.append(new_row)
+
+            elif diesel_present and siba_present:
+
+                bdc_row = row.copy()
+                bdc_row['company'] = 'bdc'
+                bdc_row['عنوان نمایندگی'] = dealer_name
+                bdc_row['عنوان شغل'] = _filter_positions(bdc_row.get('عنوان شغل', ''), 'دیزل')
+                bdc_row['شغل موازی (ارتقا)'] = _filter_positions(bdc_row.get('شغل موازی (ارتقا)', ''), 'دیزل')
+
+                smc_row = row.copy()
+                smc_row['company'] = 'smc'
+                smc_row['عنوان نمایندگی'] = self.bdc_to_smc_map[dealer_code]
+                smc_row['عنوان شغل'] = _filter_positions(smc_row.get('عنوان شغل', ''), 'سیبا')
+                smc_row['شغل موازی (ارتقا)'] = _filter_positions(smc_row.get('شغل موازی (ارتقا)', ''), 'سیبا')
+
+                new_rows.extend([bdc_row, smc_row])
+
+            else:
+                # Keep original BDC row
+                bdc_row = row.copy()
+                bdc_row['company'] = 'bdc'
+                bdc_row['عنوان نمایندگی'] = dealer_name
+                new_rows.append(bdc_row)
+                
+                # Create corresponding SMC row
+                smc_row = row.copy()
+                smc_row['company'] = 'smc'
+                smc_row['عنوان نمایندگی'] = self.bdc_to_smc_map[dealer_code]
+                new_rows.append(smc_row)
+
+        self.raw = pd.DataFrame(new_rows)
+
+    def get_original_dealer_name(self, current_dealer_name):
+        """
+        Returns the original BDC dealer name if the current name is a mapped SMC dealer.
+        This is needed for training analysis to work correctly with mapped dealers.
+        """
+        # Check if this is a mapped SMC dealer name
+        for bdc_code, smc_name in self.bdc_to_smc_map.items():
+            if smc_name == current_dealer_name:
+                # Find the original BDC dealer name with this code
+                original_dealers = self.raw[
+                    (self.raw['company'] == 'bdc') & 
+                    (self.raw['عنوان نمایندگی'].str.startswith(bdc_code))
+                ]['عنوان نمایندگی'].unique()
+                
+                if len(original_dealers) > 0:
+                    return original_dealers[0]
+        
+        # If not a mapped dealer, return the original name
+        return current_dealer_name
+
+    def get_training_data_dealer_name(self, dealer_name):
+        """
+        Returns the dealer name that should be used for training data lookups.
+        For mapped SMC dealers, this returns the original BDC dealer name.
+        """
+        return self.get_original_dealer_name(dealer_name)
+
+
+
+    def load_bdc_to_smc_mapping(self):
+        """Loads BDC to SMC dealer name mapping from a CSV like: bdc_code,smc_dealer_name"""
+        self.bdc_to_smc_map = {}
+        path = os.path.join(self.mapping_path, 'bdc_to_smc.csv')
+        if not os.path.exists(path):
+            print("⚠ Mapping file not found:", path)
+            return
+        with open(path, 'r', encoding='utf-8') as f:
+            reader = csv.reader(f)
+            next(reader)  # skip header
+            for row in reader:
+                if len(row) >= 2:
+                    bdc_code = row[0].strip()
+                    smc_dealer = row[1].strip()
+                    self.bdc_to_smc_map[bdc_code] = smc_dealer
+
+
 
     def _load_mapping_file(self, filename, mapping_dict):
         """Helper to load a single CSV mapping file."""
+        print(f"📥 Attempting to load {filename}")
+        assert 'csv' in globals(), "csv is not in globals"
+
         path = os.path.join(self.mapping_path, filename)
         if os.path.exists(path):
             with open(path, 'r', encoding='utf-8') as f:

@@ -157,7 +157,6 @@ class TrainingAnalyzer:
         summary_list.sort(key=lambda x: (x['name'], x['position']))
         return summary_list
 
-
     def _calculate_progress_percentage(self, analysis, section_type):
         """
         Calculate the percentage of completed requirements for a given section.
